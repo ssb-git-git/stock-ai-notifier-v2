@@ -219,7 +219,7 @@ async def generate_slide_image(html_content, output_path="slide.png"):
         await page.set_content(html_content, wait_until="networkidle")
         
         # コンテンツの高さに合わせてスクリーンショットを撮る
-        body_handle = await page.locator("body")
+        body_handle = page.locator("body")
         await body_handle.screenshot(path=output_path)
         await browser.close()
     print("画像を保存しました:", output_path)
