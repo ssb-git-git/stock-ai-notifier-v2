@@ -160,26 +160,28 @@ def analyze_macro_market_for_slide(articles):
     for idx, item in enumerate(articles, 1):
         formatted_input += f"■ 記事[{idx}] ({item['published_at']})\nタイトル: {item['title']}\n本文:\n{item['body'][:800]}\n---\n"
 
-    prompt = f"""あなたは初心者の個人投資家（スイングトレーダー）向けに、相場解説スライドを作成するアナリストです。
-提供された市況ニュースを分析し、**1枚の美しいHTMLスライド**として出力してください。
+    prompt = f"""あなたはプロの個人投資家（スイングトレーダー）向けに、相場解説レポートを作成するアナリストです。
+提供された市況ニュースを分析し、スマートフォンでの閲覧に最適化された**縦長1枚のHTMLレポート**として出力してください。
 
-【出力要件】
-- スライド（画像化）前提なので、洗練されたデザインのHTMLとインラインCSSで出力すること。
+【出力要件：デザイン】
+- スマホ閲覧用のため、横並び（カラム分け）は絶対にせず、全て「縦1列（flex-direction: column）」で構成すること。
+- 文字サイズは大きく（基準を24px程度）、余白（padding）を十分に取り、見出しを強調すること。
 - 背景色はダークネイビー（#1e293b）、文字は白や明るい色を基調とすること。
-- 初心者が「なぜそう動いているのか」背景を理解できるよう、情報量を落とさず、丁寧に解説すること（専門用語には簡単な補足を含める）。
-- マークダウンやコードブロック（```html）は一切不要。直接 `<!DOCTYPE html>` から出力すること。
+- 要素の高さを固定（height: 100vh等）しないこと。コンテンツ量に合わせて縦に伸びるようにすること。
+- 直接 `<!DOCTYPE html>` から出力し、マークダウンやコードブロックは含めないこと。
 
-【スライド構成】
-1. タイトル（例: 本日の相場サマリーとスイング戦略）
-2. 本日の地合いとマクロ環境（全体がリスクオンかオフか、その背景の理由）
-3. 資金流入・流出セクター（どの業種が買われ/売られているか。必ず「なぜ？」の背景を初心者にわかるように書く）
-4. スイングトレーダーへの戦略・注目点（今後のリスクや具体的な立ち回り方針）
+【出力要件：情報量と分析の深さ】
+以下の構成で、システムトレードの判断材料となるよう、事象の背景（なぜ？）を省略せずに詳細に記載すること。
+1. 本日の相場サマリー（タイトル）
+2. マクロ環境と地合い（全体がリスクオンかオフか。為替や金利などのファンダメンタルズ要因がどう影響したか）
+3. 資金流入・流出セクターの詳細（どの業種が買われ/売られているか。単なる事実だけでなく、ニュースに基づく論理的な背景を厚めに書く）
+4. スイング戦略へのインサイト（目先のリスクイベントや、テクニカル・ファンダメンタルズ両面からの具体的な立ち回り方針）
 
 【インプットデータ】
 {formatted_input}
 """
 
-    print("AIにリクエストを送信中（HTMLスライド生成）...")
+    print("AIにリクエストを送信中（HTML縦長レポート生成）...")
     client = genai.Client(api_key=GEMINI_API_KEY)
     config = types.GenerateContentConfig(temperature=0.4)
     response = client.models.generate_content(
@@ -188,7 +190,6 @@ def analyze_macro_market_for_slide(articles):
         config=config
     )
     
-    # マークダウンブロックが付いてしまった場合の除去
     html_out = response.text.strip()
     if html_out.startswith("```html"):
         html_out = html_out[7:-3]
@@ -200,11 +201,10 @@ def analyze_macro_market_for_slide(articles):
 async def generate_slide_image(html_content, output_path="slide.png"):
     print("Playwrightでスライド画像を生成中...")
     
-    # 見た目を整えるためにGoogleフォントを強制注入
     font_injection = """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap');
-    body { font-family: 'Noto Sans JP', sans-serif !important; }
+    @import url('[https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap](https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap)');
+    body { font-family: 'Noto Sans JP', sans-serif !important; margin: 0; padding: 0; }
     </style>
     """
     if "</head>" in html_content:
@@ -214,13 +214,12 @@ async def generate_slide_image(html_content, output_path="slide.png"):
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        # 高さは自動調整させるため大きめに設定
-        page = await browser.new_page(viewport={'width': 1080, 'height': 1920})
+        # スマホの画面幅をシミュレート（縦幅はfull_pageで自動拡張されるため仮の数値でOK）
+        page = await browser.new_page(viewport={'width': 800, 'height': 1200})
         await page.set_content(html_content, wait_until="networkidle")
         
-        # コンテンツの高さに合わせてスクリーンショットを撮る
-        body_handle = page.locator("body")
-        await body_handle.screenshot(path=output_path)
+        # 画面の途中で切れないよう、ページ全体のフルスクリーンショットを撮る
+        await page.screenshot(path=output_path, full_page=True)
         await browser.close()
     print("画像を保存しました:", output_path)
 
