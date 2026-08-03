@@ -1,33 +1,43 @@
-name: Daily Line Bot Runner
+name: Market Analysis LINE Notifier
 
 on:
-  workflow_dispatch:
+  # スケジュール実行（UTC時刻指定）
+  # ※ GitHubの混雑遅延を考慮し、狙いたい時刻の3〜5分前にトリガーを仕込んでいます
   schedule:
-    - cron: '0 22 * * *'
+    # ① 日本時間 08:45 (東証開場前) ➔ 前日 23:45 UTC (遅延対策で 23:41 UTC に設定)
+    - cron: '41 23 * * *'
+    
+    # ② 日本時間 12:00 (昼休み) ➔ 当日 03:00 UTC (遅延対策で 02:57 UTC に設定)
+    - cron: '57 2 * * *'
+    
+    # ③ 日本時間 19:00 (夜) ➔ 当日 10:00 UTC (遅延対策で 09:57 UTC に設定)
+    - cron: '57 9 * * *'
+
+  # 手動実行ボタン（テスト用）
+  workflow_dispatch:
 
 jobs:
   run-script:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out repository
+      - name: チェックアウト
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Pythonのセットアップ
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: ライブラリのインストール
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Run main script
+      - name: スクリプトの実行
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
           LINE_ACCESS_TOKEN: ${{ secrets.LINE_ACCESS_TOKEN }}
           LINE_DESTINATION_ID: ${{ secrets.LINE_DESTINATION_ID }}
-        run: |
-          python main.py
+        run: python main.py
