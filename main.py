@@ -192,14 +192,14 @@ def analyze_macro_market_for_slide(articles):
 {formatted_input}
 """
 
-    print("AIにリクエストを送信中（JSON形式で3カード分取得）...")
+    print("AIにリクエストを送信中（gemini-3.5-flash / JSON形式で3カード分取得）...")
     client = genai.Client(api_key=GEMINI_API_KEY)
     config = types.GenerateContentConfig(
         temperature=0.3,
         response_mime_type="application/json"
     )
     response = client.models.generate_content(
-        model='gemini-2.5-flash',
+        model='gemini-3.5-flash',
         contents=prompt,
         config=config
     )
@@ -230,138 +230,4 @@ async def generate_slide_images(html_contents):
         page = await browser.new_page(viewport={'width': 800, 'height': 1200})
         
         for idx, html in enumerate(html_contents, 1):
-            if "</head>" in html:
-                full_html = html.replace("</head>", f"{font_injection}</head>")
-            else:
-                full_html = f"{font_injection}{html}"
-
-            out_path = f"slide_{idx}.png"
-            await page.set_content(full_html, wait_until="domcontentloaded")
-            
-            # フォント読み込みと描画の安定化待機
-            await page.evaluate("document.fonts.ready")
-            await asyncio.sleep(0.5)
-
-            # キャプチャ実行
-            await page.screenshot(path=out_path, full_page=False)
-            
-            # 画像ファイルサイズの事前検証 (1KB以下は失敗扱い)
-            if os.path.exists(out_path) and os.path.getsize(out_path) > 1024:
-                image_paths.append(out_path)
-            else:
-                print(f"⚠️ 警告: slide_{idx}.png の生成に失敗したか、ファイルが空です。")
-
-        await browser.close()
-    
-    print(f"画像生成完了: {len(image_paths)}枚成功")
-    return image_paths
-
-# ==========================================
-# 6. ImgBBへのアップロード（リトライ・時限消去付き）
-# ==========================================
-def upload_to_imgbb(image_path, max_retries=3):
-    print(f"ImgBBへアップロード中: {image_path}...")
-    
-    if not os.path.exists(image_path) or os.path.getsize(image_path) <= 1024:
-        print(f"❌ アップロード中止: 無効なファイルです ({image_path})")
-        return None
-
-    for attempt in range(1, max_retries + 1):
-        try:
-            with open(image_path, "rb") as file:
-                payload = {
-                    "key": IMGBB_API_KEY,
-                    "image": base64.b64encode(file.read()),
-                    "expiration": 3600  # 1時間後に自動削除
-                }
-                res = requests.post("[https://api.imgbb.com/1/upload](https://api.imgbb.com/1/upload)", data=payload, timeout=10)
-                
-                if res.status_code == 200:
-                    res_json = res.json()
-                    if "data" in res_json and "url" in res_json["data"]:
-                        url = res_json["data"]["url"]
-                        print(f"✅ アップロード成功 ({attempt}回目): {url}")
-                        return url
-                
-                print(f"⚠️ ImgBBレスポンスエラー ({attempt}/{max_retries}): {res.status_code}")
-        except Exception as e:
-            print(f"⚠️ ImgBBアップロード例外 ({attempt}/{max_retries}): {e}")
-        
-        time.sleep(1)
-
-    print(f"❌ ImgBBアップロード失敗: {image_path}")
-    return None
-
-# ==========================================
-# 7. LINEへ3枚同時に一括画像送信（1通カウント）
-# ==========================================
-def send_line_images(image_urls):
-    url = "[https://api.line.me/v2/bot/message/push](https://api.line.me/v2/bot/message/push)"
-    
-    message_objects = []
-    for img_url in image_urls:
-        message_objects.append({
-            "type": "image",
-            "originalContentUrl": img_url,
-            "previewImageUrl": img_url
-        })
-
-    payload = {
-        "to": LINE_DESTINATION_ID,
-        "messages": message_objects
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {LINE_ACCESS_TOKEN}"
-    }
-    
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req) as response:
-            if response.status == 200:
-                print("✅ LINEへの画像3枚一括送信に成功しました！（消費通数: 1通）")
-    except Exception as e:
-        print(f"❌ LINE送信エラー: {e}")
-
-# ==========================================
-# メイン実行 (非同期イベントループ)
-# ==========================================
-async def main():
-    if not all([GEMINI_API_KEY, IMGBB_API_KEY, LINE_ACCESS_TOKEN, LINE_DESTINATION_ID]):
-        print("❌ 環境変数が不足しています。Secretsの設定を確認してください。")
-        return
-
-    # 1. ニュース取得
-    articles = await get_market_news_async(max_count=MAX_ARTICLES)
-    if not articles:
-        print("❌ 有効なニュースが取得できませんでした。")
-        return
-    
-    # 2. AI分析 ＆ 3カード分HTML生成
-    html_cards = analyze_macro_market_for_slide(articles)
-    if not html_cards or len(html_cards) != 3:
-        print("❌ HTMLカードの生成に失敗しました。")
-        return
-
-    # 3. 画像化（800x1200 の3枚）
-    image_paths = await generate_slide_images(html_cards)
-    if len(image_paths) != 3:
-        print("❌ 画像の生成枚数が不完全なため送信を中止します。")
-        return
-
-    # 4. ImgBBへアップロード
-    image_urls = []
-    for path in image_paths:
-        url = upload_to_imgbb(path)
-        if url:
-            image_urls.append(url)
-
-    # 5. LINEへ一括送信
-    if len(image_urls) == 3:
-        send_line_images(image_urls)
-    else:
-        print("❌ 画像アップロードが揃わなかったため送信を中止しました。")
-
-if __name__ == "__main__":
-    asyncio.run(main())
+            if "</head>" in html
