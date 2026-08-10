@@ -287,7 +287,7 @@ def upload_to_imgbb(image_path, max_retries=3):
                     "image": base64.b64encode(file.read()),
                     "expiration": 3600  # 1時間後に自動削除
                 }
-                res = requests.post("[https://api.imgbb.com/1/upload](https://api.imgbb.com/1/upload)", data=payload, timeout=10)
+                res = requests.post("https://api.imgbb.com/1/upload", data=payload, timeout=10)
                 
                 if res.status_code == 200:
                     res_json = res.json()
