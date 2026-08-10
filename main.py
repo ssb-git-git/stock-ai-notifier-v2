@@ -203,13 +203,26 @@ def analyze_macro_market_for_slide(articles):
         contents=prompt,
         config=config
     )
-    
     try:
-        data = json.loads(response.text.strip())
-        return [data["card1_html"], data["card2_html"], data["card3_html"]]
+      raw_text = response.text.strip()
+      # マークダウンのコードブロックが含まれている場合の除去
+      if raw_text.startswith("```"):
+        raw_text = re.sub(r"^```[a-z]*\n|```$", "", raw_text, flags=re.MULTILINE)
+
+      # strict=False を指定して制御文字（改行等）によるパースエラーを防止
+      data = json.loads(raw_text, strict=False)
+      return [data["card1_html"], data["card2_html"], data["card3_html"]]
     except Exception as e:
-        print(f"❌ JSONパースエラー: {e}")
+      print(f"❌ JSONパースエラー: {e}")
+      # バックアップ：正規表現で無理やり各HTMLを取り出すフォールバック処理
+      try:
+        c1 = re.search(r'"card1_html"\s*:\s*"(.*?)"\s*,\s*"card2_html"', raw_text, re.DOTALL).group(1)
+        c2 = re.search(r'"card2_html"\s*:\s*"(.*?)"\s*,\s*"card3_html"', raw_text, re.DOTALL).group(1)
+        c3 = re.search(r'"card3_html"\s*:\s*"(.*?)"\s*\}', raw_text, re.DOTALL).group(1)
+        return [c1, c2, c3]
+      except:
         return None
+    
 
 # ==========================================
 # 5. Playwrightで3枚の画像を個別レンダリング（描画・空画像対策強化）
