@@ -309,7 +309,7 @@ def upload_to_imgbb(image_path, max_retries=3):
 # 7. LINEへ3枚同時に一括画像送信（1通カウント）
 # ==========================================
 def send_line_images(image_urls):
-    url = "[https://api.line.me/v2/bot/message/push](https://api.line.me/v2/bot/message/push)"
+    url = "https://api.line.me/v2/bot/message/push"
     
     message_objects = []
     for img_url in image_urls:
