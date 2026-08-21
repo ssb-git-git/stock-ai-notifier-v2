@@ -1,8 +1,7 @@
-name: Market Analysis LINE Notifier
+name: Market Analysis Slack Notifier
 
 on:
   # スケジュール実行（UTC時刻指定）
-  # ※ GitHubの混雑遅延を考慮し、狙いたい時刻の3〜5分前にトリガーを仕込んでいます
   schedule:
     # ① 日本時間 08:45 (東証開場前) ➔ 前日 23:45 UTC (遅延対策で 23:41 UTC に設定)
     - cron: '41 23 * * *'
@@ -34,15 +33,13 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           playwright install chromium
-      # ▼▼▼ このステップを新しく追加！ ▼▼▼
+
       - name: 日本語フォントのインストール
         run: sudo apt-get install -y fonts-noto-cjk
-      # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
       - name: スクリプトの実行
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
-          LINE_ACCESS_TOKEN: ${{ secrets.LINE_ACCESS_TOKEN }}
-          LINE_DESTINATION_ID: ${{ secrets.LINE_DESTINATION_ID }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_NEWS: ${{ secrets.SLACK_CHANNEL_NEWS }}
         run: python main.py
