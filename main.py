@@ -1,12 +1,10 @@
 import os
 import json
-import urllib.request
 import time
 import re
 import asyncio
 import aiohttp
 import requests
-import base64
 from bs4 import BeautifulSoup
 from google import genai
 from google.genai import types
@@ -16,9 +14,8 @@ from playwright.async_api import async_playwright
 # 0. Secrets（環境変数）から各種キーを取得
 # ==========================================
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-IMGBB_API_KEY = os.environ.get("IMGBB_API_KEY")
-LINE_ACCESS_TOKEN = os.environ.get("LINE_ACCESS_TOKEN")
-LINE_DESTINATION_ID = os.environ.get("LINE_DESTINATION_ID")
+SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
+SLACK_CHANNEL_NEWS = os.environ.get("SLACK_CHANNEL_NEWS")
 
 # ==========================================
 # 1. 設定情報
@@ -57,8 +54,8 @@ def extract_published_time(soup):
 # 3. ニュース収集ロジック（非同期処理）
 # ==========================================
 async def fetch_article_details(session, url, semaphore):
-    """個別の記事ページにアクセスして本文を抽出（並列処理用）"""
-    async with semaphore:  # 同時アクセス数を制限してサーバー負荷を下げる
+    """個別の記事ページにアクセスして本文を抽出"""
+    async with semaphore:
         await asyncio.sleep(0.5)
         try:
             async with session.get(url, headers=HEADERS) as resp:
@@ -148,9 +145,9 @@ async def get_market_news_async(max_count=10):
     return collected
 
 # ==========================================
-# 4. AI分析 ＆ 3枚のスライド用HTML生成（JSON出力）
+# 4. AI分析 ＆ 3枚のスライド用HTML生成（リトライ待機付き）
 # ==========================================
-def analyze_macro_market_for_slide(articles):
+def analyze_macro_market_for_slide(articles, max_retries=2):
     if not articles:
         return None
 
@@ -196,40 +193,39 @@ def analyze_macro_market_for_slide(articles):
 {formatted_input}
 """
 
-    print("AIにリクエストを送信中（gemini-3.5-flash / JSON形式で3カード分取得）...")
     client = genai.Client(api_key=GEMINI_API_KEY)
     config = types.GenerateContentConfig(
         temperature=0.3,
         response_mime_type="application/json"
     )
-    response = client.models.generate_content(
-        model='gemini-3.5-flash',
-        contents=prompt,
-        config=config
-    )
-    try:
-      raw_text = response.text.strip()
-      # マークダウンのコードブロックが含まれている場合の除去
-      if raw_text.startswith("```"):
-        raw_text = re.sub(r"^```[a-z]*\n|```$", "", raw_text, flags=re.MULTILINE)
 
-      # strict=False を指定して制御文字（改行等）によるパースエラーを防止
-      data = json.loads(raw_text, strict=False)
-      return [data["card1_html"], data["card2_html"], data["card3_html"]]
-    except Exception as e:
-      print(f"❌ JSONパースエラー: {e}")
-      # バックアップ：正規表現で無理やり各HTMLを取り出すフォールバック処理
-      try:
-        c1 = re.search(r'"card1_html"\s*:\s*"(.*?)"\s*,\s*"card2_html"', raw_text, re.DOTALL).group(1)
-        c2 = re.search(r'"card2_html"\s*:\s*"(.*?)"\s*,\s*"card3_html"', raw_text, re.DOTALL).group(1)
-        c3 = re.search(r'"card3_html"\s*:\s*"(.*?)"\s*\}', raw_text, re.DOTALL).group(1)
-        return [c1, c2, c3]
-      except:
-        return None
-    
+    for attempt in range(1, max_retries + 1):
+        print(f"AIにリクエストを送信中 (試行 {attempt}/{max_retries})...")
+        try:
+            response = client.models.generate_content(
+                model='gemini-3.5-flash',
+                contents=prompt,
+                config=config
+            )
+            raw_text = response.text.strip()
+            if raw_text.startswith("```"):
+                raw_text = re.sub(r"^```[a-z]*\n|```$", "", raw_text, flags=re.MULTILINE)
+
+            data = json.loads(raw_text, strict=False)
+            return [data["card1_html"], data["card2_html"], data["card3_html"]]
+
+        except Exception as e:
+            print(f"⚠️ Gemini APIエラー (試行 {attempt}/{max_retries}): {e}")
+            if attempt < max_retries:
+                wait_sec = attempt * 10
+                print(f"{wait_sec}秒待機して再試行します...")
+                time.sleep(wait_sec)
+            else:
+                print("❌ リトライ上限に達しました。")
+                return None
 
 # ==========================================
-# 5. Playwrightで3枚の画像を個別レンダリング（描画・空画像対策強化）
+# 5. Playwrightで3枚の画像を個別レンダリング
 # ==========================================
 async def generate_slide_images(html_contents):
     print("Playwrightでスライド画像（3枚）を生成中...")
@@ -237,7 +233,7 @@ async def generate_slide_images(html_contents):
     
     font_injection = """
     <style>
-    @import url('[https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap](https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap)');
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap');
     body { font-family: 'Noto Sans JP', sans-serif !important; margin: 0; padding: 0; background-color: #0f172a; }
     </style>
     """
@@ -255,18 +251,15 @@ async def generate_slide_images(html_contents):
             out_path = f"slide_{idx}.png"
             await page.set_content(full_html, wait_until="domcontentloaded")
             
-            # フォント読み込みと描画の安定化待機
             await page.evaluate("document.fonts.ready")
             await asyncio.sleep(0.5)
 
-            # キャプチャ実行
             await page.screenshot(path=out_path, full_page=False)
             
-            # 画像ファイルサイズの事前検証 (1KB以下は失敗扱い)
             if os.path.exists(out_path) and os.path.getsize(out_path) > 1024:
                 image_paths.append(out_path)
             else:
-                print(f"⚠️ 警告: slide_{idx}.png の生成に失敗したか、ファイルが空です。")
+                print(f"⚠️ 警告: slide_{idx}.png の生成に失敗しました。")
 
         await browser.close()
     
@@ -274,78 +267,64 @@ async def generate_slide_images(html_contents):
     return image_paths
 
 # ==========================================
-# 6. ImgBBへのアップロード（リトライ・時限消去付き）
+# 6. Slackへ画像を直接アップロード (files.uploadV2 互換エンドポイント)
 # ==========================================
-def upload_to_imgbb(image_path, max_retries=3):
-    print(f"ImgBBへアップロード中: {image_path}...")
-    
-    if not os.path.exists(image_path) or os.path.getsize(image_path) <= 1024:
-        print(f"❌ アップロード中止: 無効なファイルです ({image_path})")
-        return None
+def send_slack_images(image_paths):
+    """Slack API (files.getUploadURLExternal -> completeUploadExternal) で直接送信"""
+    print(f"Slackチャンネル ({SLACK_CHANNEL_NEWS}) へ画像を送信中...")
+    headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}"}
+    files_to_complete = []
 
-    for attempt in range(1, max_retries + 1):
-        try:
-            with open(image_path, "rb") as file:
-                payload = {
-                    "key": IMGBB_API_KEY,
-                    "image": base64.b64encode(file.read()),
-                    "expiration": 3600  # 1時間後に自動削除
-                }
-                res = requests.post("https://api.imgbb.com/1/upload", data=payload, timeout=10)
-                
-                if res.status_code == 200:
-                    res_json = res.json()
-                    if "data" in res_json and "url" in res_json["data"]:
-                        url = res_json["data"]["url"]
-                        print(f"✅ アップロード成功 ({attempt}回目): {url}")
-                        return url
-                
-                print(f"⚠️ ImgBBレスポンスエラー ({attempt}/{max_retries}): {res.status_code}")
-        except Exception as e:
-            print(f"⚠️ ImgBBアップロード例外 ({attempt}/{max_retries}): {e}")
-        
-        time.sleep(1)
+    for path in image_paths:
+        file_size = os.path.getsize(path)
+        filename = os.path.basename(path)
 
-    print(f"❌ ImgBBアップロード失敗: {image_path}")
-    return None
+        # 1. アップロード用URLの取得
+        get_url_resp = requests.get(
+            "https://slack.com/api/files.getUploadURLExternal",
+            headers=headers,
+            params={"filename": filename, "length": file_size}
+        ).json()
 
-# ==========================================
-# 7. LINEへ3枚同時に一括画像送信（1通カウント）
-# ==========================================
-def send_line_images(image_urls):
-    url = "https://api.line.me/v2/bot/message/push"
-    
-    message_objects = []
-    for img_url in image_urls:
-        message_objects.append({
-            "type": "image",
-            "originalContentUrl": img_url,
-            "previewImageUrl": img_url
-        })
+        if not get_url_resp.get("ok"):
+            print(f"❌ Slack URL取得失敗 ({filename}): {get_url_resp.get('error')}")
+            return False
 
-    payload = {
-        "to": LINE_DESTINATION_ID,
-        "messages": message_objects
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {LINE_ACCESS_TOKEN}"
-    }
-    
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req) as response:
-            if response.status == 200:
-                print("✅ LINEへの画像3枚一括送信に成功しました！（消費通数: 1通）")
-    except Exception as e:
-        print(f"❌ LINE送信エラー: {e}")
+        upload_url = get_url_resp["upload_url"]
+        file_id = get_url_resp["file_id"]
+
+        # 2. バイナリを直接アップロード
+        with open(path, "rb") as f:
+            upload_resp = requests.post(upload_url, data=f)
+            if upload_resp.status_code != 200:
+                print(f"❌ Slackバイナリ送信失敗 ({filename})")
+                return False
+
+        files_to_complete.append({"id": file_id, "title": filename})
+
+    # 3. 指定チャンネルへ投稿を完了させる
+    complete_resp = requests.post(
+        "https://slack.com/api/files.completeUploadExternal",
+        headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}", "Content-Type": "application/json"},
+        json={
+            "files": files_to_complete,
+            "channel_id": SLACK_CHANNEL_NEWS,
+            "initial_comment": "📊 **市況スイング戦略レポート**"
+        }
+    ).json()
+
+    if complete_resp.get("ok"):
+        print("✅ Slackへの画像一括送信に成功しました！")
+        return True
+    else:
+        print(f"❌ Slack投稿完了処理エラー: {complete_resp.get('error')}")
+        return False
 
 # ==========================================
-# メイン実行 (非同期イベントループ)
+# メイン実行
 # ==========================================
 async def main():
-    if not all([GEMINI_API_KEY, IMGBB_API_KEY, LINE_ACCESS_TOKEN, LINE_DESTINATION_ID]):
+    if not all([GEMINI_API_KEY, SLACK_BOT_TOKEN, SLACK_CHANNEL_NEWS]):
         print("❌ 環境変数が不足しています。Secretsの設定を確認してください。")
         return
 
@@ -367,18 +346,8 @@ async def main():
         print("❌ 画像の生成枚数が不完全なため送信を中止します。")
         return
 
-    # 4. ImgBBへアップロード
-    image_urls = []
-    for path in image_paths:
-        url = upload_to_imgbb(path)
-        if url:
-            image_urls.append(url)
-
-    # 5. LINEへ一括送信
-    if len(image_urls) == 3:
-        send_line_images(image_urls)
-    else:
-        print("❌ 画像アップロードが揃わなかったため送信を中止しました。")
+    # 4. Slackへ送信
+    send_slack_images(image_paths)
 
 if __name__ == "__main__":
     asyncio.run(main())
