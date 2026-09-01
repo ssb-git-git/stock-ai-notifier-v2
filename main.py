@@ -198,7 +198,7 @@ def analyze_macro_market_for_slide(articles, max_retries=2):
         print(f"AIにリクエストを送信中 (試行 {attempt}/{max_retries})...")
         try:
             response = client.models.generate_content(
-                model='gemini-2.5-flash', # または gemini-3.5-flash
+                model='gemini-3.6-flash', # または gemini-3.5-flash
                 contents=prompt,
                 config=config
             )
