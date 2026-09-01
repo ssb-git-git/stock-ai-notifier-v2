@@ -43,3 +43,11 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL_NEWS: ${{ secrets.SLACK_CHANNEL_NEWS }}
         run: python main.py
+      # 既存のPython実行ステップの後に追加
+      - name: Commit and Push latest macro text
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add latest_macro.txt
+          # 差分がある場合のみコミット
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update latest_macro.txt [skip ci]" && git push)
