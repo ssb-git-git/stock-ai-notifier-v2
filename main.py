@@ -155,34 +155,40 @@ def analyze_macro_market_for_slide(articles, max_retries=2):
     for idx, item in enumerate(articles, 1):
         formatted_input += f"■ 記事[{idx}] ({item['published_at']})\nタイトル: {item['title']}\n本文:\n{item['body'][:800]}\n---\n"
 
-    prompt = f"""あなたはプロのスイングトレーダー向けに市況解説を行うチーフマクロストラテジストです。
-提供された市況ニュースを分析し、以下の2点を作成してください。
-
-1. 【スライド用HTML】スマホ閲覧用の3枚のスライドカードHTML
-2. 【AI分析用詳細マクロレポート】個別銘柄分析AIに「現在の相場環境」としてそのまま読み込ませるための、情報量を削らない詳細な構造化テキスト（800〜1200文字程度）
+    # プロンプトは元々のものをそのまま使用（一切改変しない）
+    prompt = f"""あなたはプロのスイングトレーダー向けに市況解説を行うレポートアナリストです。
+提供された市況ニュース（マクロ・クロスマセット情報）を分析し、スマホ閲覧に最適化された**3枚のスライドカード用HTML**を作成してください。
 
 出力は必ず以下のJSONフォーマットのみとし、他のテキストやコードブロック（```json）は含めないでください。
 
 {{
-  "macro_context_text": "【1. マクロ環境・地合い】...\\n【2. 金利・為替・商品市況】...\\n【3. セクター別資金動向・物色テーマ】...\\n【4. スイング戦略・市場心理・リスク要因】...",
   "card1_html": "<!DOCTYPE html>...",
   "card2_html": "<!DOCTYPE html>...",
   "card3_html": "<!DOCTYPE html>..."
 }}
 
-【macro_context_text の記述要件】
-- 単なる要約ではなく、「なぜそのセクターが買われているのか」「金利や為替の変動がどう波及しているか」の背景論理を網羅すること。
-- 個別株のスクリーニングや売買判定の判断基準となる具体的なリスク・追い風テーマを明確に記載すること。
-
-【スライドHTML共通デザイン要件】
+【共通デザイン要件】
 - 枠サイズ：幅800px、高さ1200px（固定アスペクト比 2:3）。
 - 配色：背景色ダークネイビー（#0f172a）、カード背景（#1e293b）、基本文字色（#f8fafc）。
-- フォントサイズ基準：メインタイトル 38〜42px、見出し 26〜28px、本文 22〜24px。
+- フォントサイズ基準（スマートフォンでの瞬時解読を最優先）：
+  * メインタイトル：38px〜42px（font-weight: 700）
+  * セクション見出し：26px〜28px（font-weight: 700、左側に縦ラインなどのアクセント）
+  * 本文テキスト：22px〜24px（line-height: 1.7、十分な行間を確保）
+  * サブテキスト／補足：18px〜20px
+- 下部に空きスペースが偏らないよう、Padding（48px程度）やカード間のMarginを調整して画面全体へバランス良く配置すること。
 
 【各カードの内容構成】
-■ カード1：マクロ環境と地合い（全体概況・金利・為替）
-■ カード2：物色テーマと注目銘柄のロジック（市場の動き・資金の流れ）
-■ カード3：スイング戦略へのインサイト（立ち回り・節目・リスク管理）
+■ カード1：マクロ環境と地合い（全体概況）
+- 世界・日本のマクロ動向（インフレ、金利、為替、先物等）と市場心理（リスクオン/オフ）。
+- 事象の「背景（なぜそうなったか）」をロジカルに記載。
+
+■ カード2：物色テーマと注目銘柄のロジック（市場の動き）
+- 市況ニュースで取り上げられている「物色テーマ（決算優良株、成長株、資源等）」や特定銘柄の動き。
+- 単なるセクター分けではなく、資金が向かっている「根拠と動機」を整理。
+
+■ カード3：スイング戦略へのインサイト（立ち回り）
+- テクニカル（節目、移動平均線）とファンダメンタルズ（主要指標・イベント）の交差点。
+- 翌営業日以降の具体的な立ち回り方針・リスク管理。
 
 【インプットデータ】
 {formatted_input}
@@ -198,7 +204,7 @@ def analyze_macro_market_for_slide(articles, max_retries=2):
         print(f"AIにリクエストを送信中 (試行 {attempt}/{max_retries})...")
         try:
             response = client.models.generate_content(
-                model='gemini-3.6-flash', # または gemini-3.5-flash
+                model='gemini-3.5-flash-lite',  # 元のモデル指定
                 contents=prompt,
                 config=config
             )
@@ -207,15 +213,33 @@ def analyze_macro_market_for_slide(articles, max_retries=2):
                 raw_text = re.sub(r"^```[a-z]*\n|```$", "", raw_text, flags=re.MULTILINE)
 
             data = json.loads(raw_text, strict=False)
-            
-            # テキストをファイルに保存
-            macro_text = data.get("macro_context_text", "")
-            if macro_text:
-                with open("latest_macro.txt", "w", encoding="utf-8") as f:
-                    f.write(macro_text)
-                print("✅ latest_macro.txt の書き出しに成功しました。")
+            card1 = data["card1_html"]
+            card2 = data["card2_html"]
+            card3 = data["card3_html"]
 
-            return [data["card1_html"], data["card2_html"], data["card3_html"]]
+            # HTMLからテキストのみを抽出して最新マクロテキストを構成
+            def extract_text(html_str):
+                s = BeautifulSoup(html_str, "html.parser")
+                for tag in s(["style", "script"]):
+                    tag.decompose()
+                return "\n".join([line.strip() for line in s.get_text().splitlines() if line.strip()])
+
+            macro_summary_lines = [
+                "### 1. マクロ環境と地合い",
+                extract_text(card1),
+                "\n### 2. 物色テーマと個別株動向",
+                extract_text(card2),
+                "\n### 3. スイング戦略・立ち回り方針",
+                extract_text(card3),
+            ]
+            macro_text = "\n".join(macro_summary_lines)
+
+            # ファイルに書き出し
+            with open("latest_macro.txt", "w", encoding="utf-8") as f:
+                f.write(macro_text)
+            print("✅ 元のHTMLを維持したまま latest_macro.txt の書き出しに成功しました。")
+
+            return [card1, card2, card3]
 
         except Exception as e:
             print(f"⚠️ Gemini APIエラー (試行 {attempt}/{max_retries}): {e}")
